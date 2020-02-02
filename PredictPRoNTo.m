@@ -1,46 +1,38 @@
-function PredictPRoNTo(in,s)
+function PredictPRoNTo(Data,s)
 % Predict using the PRoNTo toolbox. Supports both regression and 
 % classification, and different predictive models.
 %
-% FORMAT PredictPRoNTo(in,s)
+% FORMAT PredictPRoNTo(Data,s)
 %
 % INPUT
 %
-% 'in' is a structure that MUST have the following fields:
-%   Data       - A folder that contains nifti data for multiple subjects,
-%                which can be used as features for prediciting.
-%   PthTargReg - Path to a .mat file that contains a vector with regression
-%                targets (e.g., ages). The values should be sorted in
-%                accordance with the alphabetical ordering of the data in
-%                in.Data.
-%   PthTargCls - Path to a .mat file that contains a vector with
-%                classification targets (e.g., sex). The values should be
-%                sorted in accordance with the alphabetical ordering of the
-%                data in in.Data. The vector can only contain ones and
-%                zeros (e.g., zero for male and one for female).
-%   Prefix     - in.Data can contain multiple niftis for each subject
-%                (e.g., GM and WM segmentations). The assumption is then that 
-%                the files have the same name for each subject, besides a
-%                prefix. What prefixes to use is decided by this flag. OBS,
-%                needs to be a double cell array (e.g.,
-%                {{'wc1','wc2'}})
+% 'Data' is an Nx2 or Nx3 cell array, where N are the number of subjects.
+% Each row of 'data' should contain, in the first column, the path(s) to
+% nifti file(s) holding the data that should be used as features in the
+% prediction. If each subject has one nifti, then each element of the first
+% column should be a string. If there are multiple niftis per subject, then
+% each element of the first column should contain a cell array of string.
+% The second and third columns of 'data' should hold regression and
+% classification targets, as floats and logicals, respectively. One of the
+% two can also be given, not both. The code will figure out they are
+% regression or classification targets, based on the data type.
 %
 % 's' is a structure with settings, if not given or empty, uses default
-% (described below).
+% (described in detail below).
 %
 % EXAMPLE
 %
-% -PredictPRoNTo(struct('Data',       'Path to segmentations', ...
-%                       'PthTargReg', 'Path to regression targets', ...
-%                       'PthTargCls', 'Path to classification targets', ...
-%                       'Prefix',     {{'wc1','wc2'}}))
+% -Call PredictPRoNTo(data), where data has the following form:
+%     data{n,1} = 'subj1feature.nii' or {'subj1feature1.nii','subj1feature2.nii'}
+%     data{n,2} = floating point number (e.g., 42)
+%     data{n,3} = logical value (e.g., true)
 %
 %__________________________________________________________________________
 % A typical example of when these type of predictions could be interesting
 % is when multiple subjects' spatially normalised tissue segmentations,
 % obtained with for example the SPM12 software, are available. If the
 % subjects have age and/or sex labels, then the approach implemented here
-% can be usedul for prediciting between subjects.
+% can be used for prediciting between subjects.
 %
 % Requires that SPM12 and PRoNTo v2 are on the MATLAB path:
 % SPM12:  https://www.fil.ion.ucl.ac.uk/spm/software/download/
@@ -55,7 +47,7 @@ function PredictPRoNTo(in,s)
 
 if nargin < 2, s = struct; end
 % === Make PRoNTo features (if false, load already generated) =============
-if ~isfield(s,'DoGenerate'),       s.DoGenerate       = true; end
+if ~isfield(s,'DoProcess'),        s.DoProcess       = true; end
 % === Show one feature example ============================================
 if ~isfield(s,'DoVisualise'),      s.DoVisualise      = 1; end
 % === Show prediction results =============================================
@@ -63,10 +55,6 @@ if ~isfield(s,'DoVisualise'),      s.DoVisualise      = 1; end
 % 1 - Print to command window
 % 2 - 1 + plot figures (regression plot and ROC curve)
 if ~isfield(s,'ShowResults'),      s.ShowResults      = 2; end
-% === Do regression =======================================================
-if ~isfield(s,'DoRegression'),     s.DoRegression     = true; end
-% === Do classification ===================================================
-if ~isfield(s,'DoClassification'), s.DoClassification = true; end
 % === Folder where to store results =======================================
 if ~isfield(s,'DirRes'),           s.DirRes           = './results'; end
 % === Number of subjects to include (Inf -> all) ==========================
@@ -86,8 +74,6 @@ if ~isfield(s,'CrsVal'),           s.CrsVal           = 10; end
 % mkl - L1-Multiple Kernel Learning (SWM)
 % rvr - relevance vector regression (has an identical functional form to the SVM, but provides probabilistic output)
 if ~isfield(s,'Machine'),          s.Machine          = 'gp'; end
-% === Is data segmentations ===============================================
-if ~isfield(s,'IsSeg'),            s.IsSeg            = true; end
 
 %--------------------------------------------------------------------------
 % Add PRoNTo to MATLAB path and check that SPM is available
@@ -100,14 +86,8 @@ if isempty(fileparts(which('pronto'))), error('PRoNTo not on the MATLAB path!');
 % Get features for prediction (e.g., normalised, smoothed segmentations)
 %--------------------------------------------------------------------------
 
-if s.DoGenerate    
-    % Generate PRoNTo features (e.g., from normalised SPM12 segmentations), takes time!
-    Nii = MakeFeatures(in.Data, in.Prefix, s.DirRes, s.N, s.IncBg, s.FWHM, s.IsSeg);    
-else
-    % Load features already created
-    load(fullfile(s.DirRes,'Nii.mat')); % loads cell array 'Nii'
-    Nii = Nii(1:min(numel(Nii),s.N));
-end
+% Generate PRoNTo features (e.g., from normalised SPM12 segmentations), takes time!
+Nii = MakeFeatures(Data, s.DoProcess, s.DirRes, s.N, s.IncBg, s.FWHM);    
 
 % Inspect features
 if s.DoVisualise, spm_check_registration(char(Nii{s.DoVisualise})); end
@@ -116,37 +96,18 @@ if s.DoVisualise, spm_check_registration(char(Nii{s.DoVisualise})); end
 % Load targets (e.g., sex or age)
 %--------------------------------------------------------------------------
 
-if s.DoRegression
-    % Regression
-    if isempty(in.PthTargReg)
-        % 'Simulate' targets (OBS: just for testing!)
-        TargReg = 100*rand(numel(Nii),1); % regression targets
-    else
-        TargReg = LoadTargets(in.PthTargReg,s.N);
-    end
-end
-
-if s.DoClassification
-    % Classification
-    if isempty(in.PthTargCls)
-        % 'Simulate' targets (OBS: just for testing!)
-        TargCls = single(rand(numel(Nii),1) > 0.5);    
-    else
-        TargCls = LoadTargets(in.PthTargCls,s.N);        
-    end
-    TargCls = {find(TargCls == 0), find(TargCls == 1)}; % classification targets
-end
+[TargCls,TargReg] = GetTargets(Data,s.N);
 
 %--------------------------------------------------------------------------
 % Predict
 %--------------------------------------------------------------------------
 
-if s.DoRegression
+if ~isempty(TargReg)
     % Run regression 
     ResReg = Predict(Nii, TargReg, s.DirRes, s.Msk, s.CrsVal, s.Machine);
 end
 
-if s.DoClassification
+if ~isempty(TargCls)
     % Run classification
     ResClass = Predict(Nii, TargCls, s.DirRes, s.Msk, s.CrsVal, s.Machine);
 end
@@ -157,13 +118,13 @@ end
 
 if s.ShowResults >= 1
     % Print to command window
-    if s.DoRegression
+    if ~isempty(TargReg)
         disp('--------------------------------------------------------------------------')
         disp('Regression Results')
         disp(ResReg{2})
     end
 
-    if s.DoClassification
+    if ~isempty(TargCls)
         disp('--------------------------------------------------------------------------')
         disp('Classification Results')
         disp(ResClass{2})
@@ -172,13 +133,13 @@ end
 
 if s.ShowResults >= 2
     % Plot to figure    
-    if s.DoRegression
+    if ~isempty(TargReg)
         % Regression plot
         PlotRegRes(ResReg);
         print(gcf,fullfile(s.DirRes,'ResReg.png'),'-dpng','-r300');  
     end
 
-    if s.DoClassification
+    if ~isempty(TargCls)
         % ROC curve
         prt_plot_ROC(ResClass{1}.PRT, 1, 1);
         print(gcf,fullfile(s.DirRes,'ResClass.png'),'-dpng','-r300');  
@@ -195,14 +156,30 @@ end
 %==========================================================================
 
 %==========================================================================
-function Nii = MakeFeatures(Data,Prefix,DirRes0,N,IncBg,FWHM,IsSeg)
+function [TargCls,TargReg] = GetTargets(Data,N)
+% Get predicion targets
+
+N       = min(size(Data,1),N);
+TargCls = zeros(N,1);
+TargReg = zeros(N,1);
+for n=1:N
+    if islogical(Data{n,2}), TargCls(n) = Data{n,2}; end
+    if isfloat(Data{n,2}), TargReg(n) = Data{n,2}; end
+    if size(Data,2) > 2 && islogical(Data{n,3}), TargCls(n) = Data{n,3}; end
+    if size(Data,2) > 2 && isfloat(Data{n,3}),   TargReg(n) = Data{n,3}; end
+end
+TargCls = {find(TargCls == 0), find(TargCls == 1)};
+end
+%==========================================================================
+
+%==========================================================================
+function Nii = MakeFeatures(Data,DoProcess,DirRes0,N,IncBg,FWHM)
 % Make PRoNTo input features (stored as nifti) from nifti files of, e.g.,
 % spatially normalised tissue segmentations
 
 if nargin < 4, N     = Inf;  end
 if nargin < 5, IncBg = true; end
 if nargin < 6, FWHM  = 12;   end
-if nargin < 7, IsSeg = true; end
 
 fprintf('Generating features for PRoNTo...\n');
 
@@ -210,85 +187,57 @@ fprintf('Generating features for PRoNTo...\n');
 % Get paths to NIfTI segmentations, and targets
 %--------------------------------------------------------------------------
 
-% Number of tissues
-NumClasses = numel(Prefix);  %excl. background
-
-ClassNames = '';
-for i=1:NumClasses
-    ClassNames = [ClassNames Prefix{i}];
-end
-if IncBg
-    ClassNames = [ClassNames 'bg'];
-end
-if FWHM > 0
-    ClassNames = [ClassNames '-FWHM' num2str(FWHM)];
+% Number of subjects and classesN = min(size(Data,1),N); (excl. background)
+N = min(size(Data,1),N);
+if iscell(Data{1})
+    NumClasses = numel(Data{1});   
+else
+    NumClasses = 1;
 end
 
 % Folder for storing NIfTIs
-DirRes = fullfile(DirRes0,ClassNames);
+DirRes = fullfile(DirRes0,'features');
 if exist(DirRes,'dir') == 7, rmdir(DirRes,'s'); end; mkdir(DirRes);
 
-% Get filenames
-if iscell(Data)
-    % Filenames are given as cell array
-    Files = Data;
-else
-    % Directory with data is given, so generate cell array with filenames
-    Files = cell(1,NumClasses);
-    for k=1:NumClasses
-        Files{k} = spm_select('FPList',Data,['^' Prefix{k} '.*\.nii$']);
-    end
-end
-
-% Sanity check
-N1 = size(Files{1},1);
-for k=1:NumClasses
-   if size(Files{k},1) ~= N1 || isempty(Files{k})
-       % There need to be the same number of files of each type, and no
-       % empty elements are allowed
-       error('Input data error!')
-   end
-end
-
-% Get number of subjects
-N = min(size(Files{1},1),N);
-
-% Allocate
-Nii = cell(1,N);
-
 % Loop over subjects
+Nii = cell(1,N);
 for n=1:N
      
-    fprintf('%i/%i ',n,N)
-    
-    % Read class into an array, used as features for PRONTO    
-    Image      = [];
-    Background = 1;
-    for k=1:NumClasses
-        PthClass = deblank(Files{k}(n,:));
-        Niis     = nifti(PthClass);               
-        Image_k  = single(Niis.dat(:,:,:));
-        
-        Image = cat(3,Image,Image_k);
-        
-        if IncBg && IsSeg, Background = Background - Image_k; end
+    if DoProcess || NumClasses > 1
+        fprintf('%i/%i ',n,N)
+
+        % Read class into an array, used as features for PRONTO    
+        Image      = [];
+        Background = 1;
+        for k=1:NumClasses
+            PthClass = deblank(Data{n,1}{k});
+            Niis     = nifti(PthClass);               
+            Image_k  = single(Niis.dat(:,:,:));
+
+            Image = cat(3,Image,Image_k);
+
+            if IncBg, Background = Background - Image_k; end
+        end
+        clear Image_k
+
+        if IncBg
+            % Add background class                               
+            Image = cat(3,Image,Background);
+        end    
+
+        if FWHM > 0
+            % Smooth image
+            VoxelSize = sqrt(sum(Niis.mat(1:3,1:3).^2));   
+            Image     = SmoothImage(Image,FWHM,VoxelSize);
+        end
+
+        PthClass = WriteNIfTI(PthClass,DirRes,Image);    
+    else
+        PthClass = Data{n,1};
     end
-    clear Image_k
-    
-    if IncBg && IsSeg
-        % Add background class                               
-        Image = cat(3,Image,Background);
-    end    
-    
-    if FWHM > 0
-        % Smooth image
-        VoxelSize = sqrt(sum(Niis.mat(1:3,1:3).^2));   
-        Image     = SmoothImage(Image,FWHM,VoxelSize);
-    end
-    
-    PthClass = WriteNIfTI(PthClass,DirRes,Image);
     
     Nii{n} = PthClass;
+    
 end
 
 save(fullfile(DirRes0,'Nii.mat'),'Nii')
