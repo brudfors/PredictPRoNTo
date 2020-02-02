@@ -10,4 +10,4 @@ For detailed information see PredictPRoNTo.m.
 
 Requires that SPM12 and PRoNTo v2 are on the MATLAB path:
 * SPM12:  https://www.fil.ion.ucl.ac.uk/spm/software/download/
-* PRoNTo: http://www.mlnl.cs.ucl.ac.uk/pronto/prtsoftware.html
+* PRoNTo: http://www.mlnl.cs.ucl.ac.uk/pronto/prtsoftware.html (.zip file in this repo!)
