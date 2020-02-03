@@ -6,6 +6,16 @@ A typical example of when these type of predictions could be interesting is when
 
 For detailed information see PredictPRoNTo.m.
 
+## Example
+
+Call `PredictPRoNTo(data)`, where `data` is a cell array with the following form:
+
+data{n,1} = 'subj1feature.nii' or {'subj1feature1.nii','subj1feature2.nii'}  
+data{n,2} = floating point number (e.g., 42)  
+data{n,3} = logical value (e.g., true)
+
+and `n` is the subject index going from `1` to `N`, the total number of subjects.
+
 ## Requirements 
 
 Requires that SPM12 and PRoNTo v2 are on the MATLAB path:
