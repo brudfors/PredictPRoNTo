@@ -2,7 +2,7 @@
 
 Predict using the PRoNTo toolbox. Supports both regression and classification, and different predictive models.
 
-A typical example of when these type of predictions could be interesting is when multiple subjects' spatially normalised tissue segmentations from MRI data, obtained with for example the SPM12 software, are available. If the subjects have age and/or sex labels, then the approach implemented here can be used for prediciting between subjects.
+A typical example of when these type of predictions could be interesting is when multiple subjects' spatially normalised tissue segmentations from brain MRI data, obtained with for example the SPM12 software, are available. If the subjects have age and/or sex labels, then the approach implemented here can be used for prediciting between subjects.
 
 For detailed information see PredictPRoNTo.m.
 
