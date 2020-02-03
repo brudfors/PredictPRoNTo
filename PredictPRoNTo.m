@@ -74,6 +74,8 @@ if ~isfield(s,'CrsVal'),           s.CrsVal           = 10; end
 % mkl - L1-Multiple Kernel Learning (SWM)
 % rvr - relevance vector regression (has an identical functional form to the SVM, but provides probabilistic output)
 if ~isfield(s,'Machine'),          s.Machine          = 'gp'; end
+% === Delete PRoNTo feautre set (large), at end of Predict() ==============
+if ~isfield(s,'CleanFeatureSet'),  s.CleanFeatureSet  = true; end
 
 %--------------------------------------------------------------------------
 % Add PRoNTo to MATLAB path and check that SPM is available
@@ -92,11 +94,18 @@ Nii = MakeFeatures(Data, s.DoProcess, s.DirRes, s.N, s.IncBg, s.FWHM);
 % Inspect features
 if s.DoVisualise, spm_check_registration(char(Nii{s.DoVisualise})); end
 
+% Save Data with possibly processed features and targets to (s.DirRes), so
+% that the preprocessed features can be loaded, to save time.
+Data      = Data(1:s.N,:);
+Data(:,1) = Nii;
+save(fullfile(s.DirRes,'Nii.mat'),'Data');
+
 %--------------------------------------------------------------------------
 % Load targets (e.g., sex or age)
 %--------------------------------------------------------------------------
 
 [TargCls,TargReg] = GetTargets(Data,s.N);
+clear Data
 
 %--------------------------------------------------------------------------
 % Predict
@@ -104,12 +113,12 @@ if s.DoVisualise, spm_check_registration(char(Nii{s.DoVisualise})); end
 
 if ~isempty(TargReg)
     % Run regression 
-    ResReg = Predict(Nii, TargReg, s.DirRes, s.Msk, s.CrsVal, s.Machine);
+    ResReg = Predict(Nii, TargReg, s.DirRes, s.Msk, s.CrsVal, s.Machine, s.CleanFeatureSet);
 end
 
 if ~isempty(TargCls)
     % Run classification
-    ResClass = Predict(Nii, TargCls, s.DirRes, s.Msk, s.CrsVal, s.Machine);
+    ResClass = Predict(Nii, TargCls, s.DirRes, s.Msk, s.CrsVal, s.Machine, s.CleanFeatureSet);
 end
 
 %--------------------------------------------------------------------------
@@ -240,19 +249,18 @@ for n=1:N
     
 end
 
-save(fullfile(DirRes0,'Nii.mat'),'Nii')
-
 fprintf('\nDone!\n');
 end
 %==========================================================================
 
 %==========================================================================
-function Res = Predict(Nii,Targets,DirRes,Msk,CrsVal,Machine)
+function Res = Predict(Nii,Targets,DirRes,Msk,CrsVal,Machine,CleanFeatureSet)
 % Predict, either regression or classification, using PRoNTo
 
-if nargin < 4, Msk     = true; end
-if nargin < 5, CrsVal  = 10;   end
-if nargin < 6, Machine = 'gp'; end
+if nargin < 4, Msk             = true; end
+if nargin < 5, CrsVal          = 10;   end
+if nargin < 6, Machine         = 'gp'; end
+if nargin < 7, CleanFeatureSet = true; end
 
 % Create results directory
 DirRes = fullfile(DirRes,'PRT');
@@ -422,7 +430,7 @@ end
 % % Delete Feature_set_modality (because it is HUGE)
 %--------------------------------------------------------------------------
 
-delete(fullfile(DirRes,'Feature_set_modality.dat'))
+if CleanFeatureSet, delete(fullfile(DirRes,'Feature_set_modality.dat')); end
 end
 %==========================================================================
 
@@ -513,7 +521,7 @@ axis image
 grid on
 
 title('Scatter plot')
-title(sprintf('Regression Plot / R2 = %0.2f',Res{1}.PRT.model.output.stats.r2))
+title(sprintf('Regression Plot / R^2 = %0.2f',Res{1}.PRT.model.output.stats.r2))
 ylabel('Estimated','FontWeight','bold')
 xlabel('True','FontWeight','bold')
 end
