@@ -49,21 +49,28 @@ if nargin < 2, s = struct; end
 % === Make PRoNTo features (if false, load already generated) =============
 if ~isfield(s,'DoProcess'),        s.DoProcess       = true; end
 % === Show one feature example ============================================
-if ~isfield(s,'DoVisualise'),      s.DoVisualise      = 1; end
+if ~isfield(s,'DoVisualise'),      s.DoVisualise      = 0; end
 % === Show prediction results =============================================
 % 0 - Show nothing
 % 1 - Print to command window
 % 2 - 1 + plot figures (regression plot and ROC curve)
 if ~isfield(s,'ShowResults'),      s.ShowResults      = 2; end
+% === Figure number for show res ==========================================
+% regression results are plotted in figure(s.FigNum), and classification
+% results in figure(s.FigNum + 1)
+if ~isfield(s,'FigNum'),           s.FigNum           = 1; end
 % === Folder where to store results =======================================
 if ~isfield(s,'DirRes'),           s.DirRes           = './results'; end
 % === Number of subjects to include (Inf -> all) ==========================
+% For testing, it is useful to have a small number here initially
 if ~isfield(s,'N'),                s.N                = Inf; end
 % === Include background in feature data ==================================
-if ~isfield(s,'IncBg'),            s.IncBg            = true; end
+if ~isfield(s,'IncBg'),            s.IncBg            = false; end
 % === FWHM of smoothing of PRoNTo features ================================
-if ~isfield(s,'FWHM'),             s.FWHM             = 12; end
+if ~isfield(s,'FWHM'),             s.FWHM             = 10; end
 % === Apply brain mask to PRoNTo features =================================
+% true - uses pronto's default mask
+% str  - path to a mask, as nifti file
 if ~isfield(s,'Msk'),              s.Msk              = true; end
 % === Cross-validaton setting =============================================
 % -1: leave one out, >=1: k-fold
@@ -89,16 +96,32 @@ if isempty(fileparts(which('pronto'))), error('PRoNTo not on the MATLAB path!');
 %--------------------------------------------------------------------------
 
 % Generate PRoNTo features (e.g., from normalised SPM12 segmentations), takes time!
-Nii = MakeFeatures(Data, s.DoProcess, s.DirRes, s.N, s.IncBg, s.FWHM);    
+[Nii, NumClasses, IdxObs] = MakeFeatures(Data, s.DoProcess, s.DirRes, s.N, s.IncBg, s.FWHM);    
 
 % Inspect features
 if s.DoVisualise, spm_check_registration(char(Nii{s.DoVisualise})); end
 
 % Save Data with possibly processed features and targets to (s.DirRes), so
 % that the preprocessed features can be loaded, to save time.
+if s.N == Inf
+    s.N = size(Data, 1);
+end
 Data      = Data(1:s.N,:);
 Data(:,1) = Nii;
-save(fullfile(s.DirRes,'Nii.mat'),'Data');
+save(fullfile(s.DirRes,'Data_PredictPRoNTo.mat'),'Data');
+
+% Filter data without observations
+if any(IdxObs == 0)
+    fprintf('WARNING: N=%i subjects have no feature data\n', sum(IdxObs == 0))
+end
+Data = Data(IdxObs,:);
+Nii = Nii(IdxObs);
+
+%--------------------------------------------------------------------------
+% Make mask
+%--------------------------------------------------------------------------
+
+PthMask = MakeMask(Nii, NumClasses, s.Msk, s.DirRes);
 
 %--------------------------------------------------------------------------
 % Load targets (e.g., sex or age)
@@ -113,12 +136,12 @@ clear Data
 
 if ~isempty(TargReg)
     % Run regression 
-    ResReg = Predict(Nii, TargReg, s.DirRes, s.Msk, s.CrsVal, s.Machine, s.CleanFeatureSet);
+    ResReg = Predict(Nii, TargReg, s.DirRes, PthMask, s.CrsVal, s.Machine, s.CleanFeatureSet);
 end
 
 if ~isempty(TargCls)
     % Run classification
-    ResClass = Predict(Nii, TargCls, s.DirRes, s.Msk, s.CrsVal, s.Machine, s.CleanFeatureSet);
+    ResClass = Predict(Nii, TargCls, s.DirRes, PthMask, s.CrsVal, s.Machine, s.CleanFeatureSet);
 end
 
 %--------------------------------------------------------------------------
@@ -144,13 +167,15 @@ if s.ShowResults >= 2
     % Plot to figure    
     if ~isempty(TargReg)
         % Regression plot
-        PlotRegRes(ResReg);
+        PlotRegRes(ResReg, s.FigNum);
         print(gcf,fullfile(s.DirRes,'ResReg.png'),'-dpng','-r300');  
     end
 
     if ~isempty(TargCls)
         % ROC curve
-        prt_plot_ROC(ResClass{1}.PRT, 1, 1);
+        f = figure(s.FigNum + 1);
+        clf(f);
+        prt_plot_ROC(ResClass{1}.PRT, 1, 1, gca);
         print(gcf,fullfile(s.DirRes,'ResClass.png'),'-dpng','-r300');  
     end
 end
@@ -165,24 +190,89 @@ end
 %==========================================================================
 
 %==========================================================================
+function PathMask = MakeMask(Nii, NumClasses, UseMask, DirRes)
+if UseMask == false
+    % Do not mask -> use identity mask
+    NiiImage       = nifti(Nii{1});
+    ImageDim       = NiiImage.dat.dim;
+    ImageMat       = NiiImage.mat;
+    PathMask       = fullfile(DirRes,'mask.nii');  
+    NiiOut         = nifti;
+    NiiOut.dat     = file_array(PathMask,ImageDim,[spm_type('float32') spm_platform('bigend')]);
+    NiiOut.mat     = ImageMat;
+    NiiOut.mat0    = ImageMat;
+    NiiOut.descrip = 'PRONTO mask';
+    create(NiiOut);
+    NiiOut.dat(:,:,:,:) = ones(ImageDim);
+    return
+end
+
+% Get path to mask
+if ischar(UseMask) && (exist(UseMask, 'file') == 2)
+    % Custom
+    PathMask = UseMask;
+else
+    % Pronto's default mask
+    PathMask = fullfile(fileparts(which('pronto')),'masks/SPM_mask_noeyes.img');
+end
+
+% Repeat mask over number of classes
+NiiMask = nifti(PathMask);
+mask = NiiMask.dat() > 0;
+mask = repmat(mask, [1, 1, NumClasses]);
+ImageDim = size(mask);
+
+% Write new mask
+PathMask       = fullfile(DirRes,'new_mask.nii');  
+NiiOut         = nifti;
+NiiOut.dat     = file_array(PathMask,ImageDim,[spm_type('float32') spm_platform('bigend')]);
+NiiOut.mat     = NiiMask.mat;
+NiiOut.mat0    = NiiMask.mat;
+NiiOut.descrip = 'PRONTO mask';
+create(NiiOut);
+NiiOut.dat(:,:,:,:) = mask;
+end
+%==========================================================================
+
+%==========================================================================
 function [TargCls,TargReg] = GetTargets(Data,N)
 % Get predicion targets
 
 N       = min(size(Data,1),N);
 TargCls = zeros(N,1);
 TargReg = zeros(N,1);
+cnt_reg = 0;
+cnt_class = 0;
 for n=1:N
-    if islogical(Data{n,2}), TargCls(n) = Data{n,2}; end
-    if isfloat(Data{n,2}), TargReg(n) = Data{n,2}; end
-    if size(Data,2) > 2 && islogical(Data{n,3}), TargCls(n) = Data{n,3}; end
-    if size(Data,2) > 2 && isfloat(Data{n,3}),   TargReg(n) = Data{n,3}; end
+    if islogical(Data{n,2})
+        TargCls(n) = Data{n,2}; 
+        cnt_class = cnt_class + 1;
+    end
+    if isfloat(Data{n,2})
+        TargReg(n) = Data{n,2}; 
+        cnt_reg = cnt_reg + 1;
+    end
+    if size(Data,2) > 2 && islogical(Data{n,3})
+        TargCls(n) = Data{n,3}; 
+        cnt_class = cnt_class + 1;
+    end
+    if size(Data,2) > 2 && isfloat(Data{n,3})
+        TargReg(n) = Data{n,3}; 
+        cnt_reg = cnt_reg + 1;
+    end
 end
 TargCls = {find(TargCls == 0), find(TargCls == 1)};
+if cnt_reg == 0
+   TargReg = []; 
+end
+if cnt_class == 0
+    TargCls = [];
+end
 end
 %==========================================================================
 
 %==========================================================================
-function Nii = MakeFeatures(Data,DoProcess,DirRes0,N,IncBg,FWHM)
+function [Nii, K, IdxObs] = MakeFeatures(Data,DoProcess,DirRes0,N,IncBg,FWHM)
 % Make PRoNTo input features (stored as nifti) from nifti files of, e.g.,
 % spatially normalised tissue segmentations
 
@@ -210,7 +300,9 @@ if exist(DirRes,'dir') == 7, rmdir(DirRes,'s'); end; mkdir(DirRes);
 
 % Loop over subjects
 Nii = cell(1,N);
-for n=1:N
+IdxObs =  true(1,N);
+% for n=1:N
+parfor n=1:N
      
     if DoProcess || NumClasses > 1
         fprintf('%i/%i ',n,N)
@@ -227,10 +319,10 @@ for n=1:N
 
             if IncBg, Background = Background - Image_k; end
         end
-        clear Image_k
 
         if IncBg
-            % Add background class                               
+            % Add background class
+            Background = max(Background, 0);
             Image = cat(3,Image,Background);
         end    
 
@@ -240,6 +332,9 @@ for n=1:N
             Image     = SmoothImage(Image,FWHM,VoxelSize);
         end
 
+        if sum(Image(:)) == 0
+            IdxObs(n) = false;
+        end
         PthClass = WriteNIfTI(PthClass,DirRes,Image);    
     else
         PthClass = Data{n,1};
@@ -249,18 +344,19 @@ for n=1:N
     
 end
 
+K = NumClasses + IncBg;
+
 fprintf('\nDone!\n');
 end
 %==========================================================================
 
 %==========================================================================
-function Res = Predict(Nii,Targets,DirRes,Msk,CrsVal,Machine,CleanFeatureSet)
+function Res = Predict(Nii,Targets,DirRes,PthMask,CrsVal,Machine,CleanFeatureSet)
 % Predict, either regression or classification, using PRoNTo
 
-if nargin < 4, Msk             = true; end
-if nargin < 5, CrsVal          = 10;   end
-if nargin < 6, Machine         = 'gp'; end
-if nargin < 7, CleanFeatureSet = true; end
+if nargin < 5, CrsVal          = 10;    end
+if nargin < 6, Machine         = 'gp';  end
+if nargin < 7, CleanFeatureSet = true;  end
 
 % Create results directory
 DirRes = fullfile(DirRes,'PRT');
@@ -272,25 +368,6 @@ pth_PRT = fullfile(DirRes,'PRT.mat');
 % Classification or regression?
 if iscell(Targets), Model = 'classify';
 else,               Model = 'regress';
-end
-
-% Get mask
-if Msk    
-    % Remove outside of brain voxels
-    PthMask = fullfile(fileparts(which('pronto')),'masks/SPM_mask_noeyes.img');
-else
-    % Keep all voxels
-    NiiImage       = nifti(Nii{1});
-    ImageDim       = NiiImage.dat.dim;
-    ImageMat       = NiiImage.mat;
-    PthMask        = fullfile(DirRes,'mask.nii');  
-    NiiOut         = nifti;
-    NiiOut.dat     = file_array(PthMask,ImageDim,[spm_type('float32') spm_platform('bigend')]);
-    NiiOut.mat     = ImageMat;
-    NiiOut.mat0    = ImageMat;
-    NiiOut.descrip = 'PRONTO mask';
-    create(NiiOut);
-    NiiOut.dat(:,:,:,:) = ones(ImageDim);
 end
 
 % Set number of subjects
@@ -505,8 +582,9 @@ end
 %==========================================================================
 
 %==========================================================================
-function PlotRegRes(Res)
-figure;
+function PlotRegRes(Res, FigNum)
+f = figure(FigNum);
+clf(f);
 T = []; % true
 P = []; % predicted
 for k=1:numel(Res{1}.PRT.model.output.fold)
@@ -516,12 +594,13 @@ for k=1:numel(Res{1}.PRT.model.output.fold)
     P = [P; p];
 end
 
-plot(T,P,'k.','MarkerSize',10);
-axis image 
+plot(T,P,'k.','MarkerSize',6);
+% axis image 
 grid on
 
 title('Scatter plot')
-title(sprintf('Regression Plot / R^2 = %0.2f',Res{1}.PRT.model.output.stats.r2))
+title(sprintf('Regression Plot / R^2 = %0.3f / RMSE = %0.3f', ...
+      Res{1}.PRT.model.output.stats.r2, sqrt(Res{1}.PRT.model.output.stats.mse)))
 ylabel('Estimated','FontWeight','bold')
 xlabel('True','FontWeight','bold')
 end
