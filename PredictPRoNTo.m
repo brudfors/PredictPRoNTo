@@ -69,7 +69,7 @@ if ~isfield(s,'IncBg'),            s.IncBg            = false; end
 % === FWHM of smoothing of PRoNTo features ================================
 if ~isfield(s,'FWHM'),             s.FWHM             = 10; end
 % === Apply brain mask to PRoNTo features =================================
-% true - uses pronto's default mask
+% true - Mask from SPM12 atlas
 % str  - path to a mask, as nifti file
 if ~isfield(s,'Msk'),              s.Msk              = true; end
 % === Cross-validaton setting =============================================
@@ -176,6 +176,7 @@ if s.ShowResults >= 2
         f = figure(s.FigNum + 1);
         clf(f);
         prt_plot_ROC(ResClass{1}.PRT, 1, 1, gca);
+        axis image
         print(gcf,fullfile(s.DirRes,'ResClass.png'),'-dpng','-r300');  
     end
 end
@@ -211,16 +212,20 @@ end
 if ischar(UseMask) && (exist(UseMask, 'file') == 2)
     % Custom
     PathMask = UseMask;
+    % Load mask
+    NiiMask = nifti(PathMask);
+    mask = NiiMask.dat() > 0;
+    % Repeat mask over number of classes
+    mask = repmat(mask, [1, 1, NumClasses]);
+    ImageDim = size(mask);
 else
-    % Pronto's default mask
-    PathMask = fullfile(fileparts(which('pronto')),'masks/SPM_mask_noeyes.img');
+    % Mask from SPM12 atlas
+    PathMask = fullfile(spm('dir'),'tpm','TPM.nii,');
+    NiiMask = nifti(PathMask);
+    mask = sum(NiiMask.dat(:,:,:,1:3), 4) >= 0.5;
+    mask = repmat(mask, [1, 1, NumClasses]);
+    ImageDim = size(mask);
 end
-
-% Repeat mask over number of classes
-NiiMask = nifti(PathMask);
-mask = NiiMask.dat() > 0;
-mask = repmat(mask, [1, 1, NumClasses]);
-ImageDim = size(mask);
 
 % Write new mask
 PathMask       = fullfile(DirRes,'new_mask.nii');  
@@ -595,7 +600,7 @@ for k=1:numel(Res{1}.PRT.model.output.fold)
 end
 
 plot(T,P,'k.','MarkerSize',6);
-% axis image 
+axis image 
 grid on
 
 title('Scatter plot')
